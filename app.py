@@ -1,74 +1,88 @@
 import os
-from flask import Flask, render_template, request, redirect, url_for, send_from_directory
+from flask import Flask, render_template, request, jsonify, redirect, url_for
+
+import main2  # Your ML model file
 
 app = Flask(__name__)
 
-# Folder to store uploaded files
+# Define upload folder
 UPLOAD_FOLDER = 'uploads'
-
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+# Ensure the uploads folder exists
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
 
 # Allowed file extensions
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf'}
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Route for Home Page
 @app.route('/')
 def home():
     return render_template('home.html')
 
-model = "Aadhar_Card"
+@app.route('/upload')
+def upload_form():
+    return render_template('upload_form.html')
 
-# Route for Upload Form Page
-@app.route('/upload', methods=['GET', 'POST'])
+# Validate File Before Submission (Real-Time)
+@app.route('/validate_document', methods=['POST'])
+def validate_document():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+
+    file = request.files['file']
+    file_type = request.form.get('file_type')  # Either 'Aadhar' or 'PAN'
+
+    if file and allowed_file(file.filename):
+        temp_path = os.path.join(app.config['UPLOAD_FOLDER'], "temp_" + file.filename)
+        file.save(temp_path)
+
+        # Predict the document type using ML model
+        prediction = main2.predict(temp_path)
+        os.remove(temp_path)  # Remove temp file after checking
+
+        # Validate based on expected file type
+        if (file_type == "Aadhar" and prediction == "Aadhar_Card") or \
+           (file_type == "PAN" and prediction == "Pan_Card"):
+            return jsonify({'valid': True, 'filename': file.filename})
+        else:
+            return jsonify({'valid': False, 'error': f"Invalid {file_type} document."})
+
+    return jsonify({'error': 'Invalid file format'}), 400
+
+# Save Files After Form Submission
+@app.route('/upload_form', methods=['POST'])
 def upload_page():
     if request.method == 'POST':
         name = request.form.get('name')
-        
         aadhar = request.files.get('aadhar')
         pan = request.files.get('pan')
 
-        error_message = None  # Variable to hold error message
-        
-        # Check if the model doesn't match the uploaded file type
-        if model == "Aadhar_Card" and not aadhar:
-            error_message = "Aadhar card is required!"
-        elif model == "Pan_Card" and not pan:
-            error_message = "PAN card is required!"
-        
-        # If there's an error, render the form again with the error message
-        if error_message:
-            return render_template('upload_form.html', error=error_message)
-        
+        if not aadhar or not pan:
+            return render_template('upload_form.html', error="Both Aadhar and PAN card are required.")
+
+        # Save Aadhar card
         if aadhar and allowed_file(aadhar.filename):
             aadhar_path = os.path.join(app.config['UPLOAD_FOLDER'], aadhar.filename)
             aadhar.save(aadhar_path)
-            print(f"Aadhar saved: {aadhar_path}")  
+        else:
+            return render_template('upload_form.html', error="Invalid Aadhar card format.")
 
+        # Save PAN card
         if pan and allowed_file(pan.filename):
             pan_path = os.path.join(app.config['UPLOAD_FOLDER'], pan.filename)
             pan.save(pan_path)
-            print(f"PAN saved: {pan_path}")  
+        else:
+            return render_template('upload_form.html', error="Invalid PAN card format.")
 
-        # Redirect to the success page after upload
         return redirect(url_for('success_page'))
 
-    return render_template('upload_form.html')
-
-
-
-# Route to Display Success Page
 @app.route('/success')
 def success_page():
-    return render_template('tick.html')
-
-# Route to Serve Uploaded Files
-@app.route('/uploads/<filename>')
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    return render_template('tick.html', message="Files successfully uploaded!")
 
 if __name__ == '__main__':
     app.run(debug=True)
